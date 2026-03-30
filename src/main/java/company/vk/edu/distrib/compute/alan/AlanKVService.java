@@ -5,6 +5,8 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import company.vk.edu.distrib.compute.Dao;
 import company.vk.edu.distrib.compute.KVService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -19,6 +21,8 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 class AlanKVService implements KVService {
+    private static final Logger log = LoggerFactory.getLogger(AlanKVService.class);
+
     private final int port;
     private final Dao<byte[]> dao;
     private final HttpServer server;
@@ -31,6 +35,10 @@ class AlanKVService implements KVService {
 
         server.createContext("/v0/status", wrap(this::handleStatus));
         server.createContext("/v0/entity", wrap(this::handleEntity));
+
+        if (log.isInfoEnabled()) {
+            log.info("AlanKVService created for port {}", port);
+        }
     }
 
     @Override
@@ -39,10 +47,20 @@ class AlanKVService implements KVService {
             throw new IllegalStateException("Service already started");
         }
         try {
-            server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
+            InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), port);
+            server.bind(address, 0);
+            if (log.isInfoEnabled()) {
+                log.info("HTTP server bound to {}", server.getAddress());
+            }
+
             server.start();
             started = true;
+
+            if (log.isInfoEnabled()) {
+                log.info("HTTP server started on {}", server.getAddress());
+            }
         } catch (IOException e) {
+            log.error("Failed to start HTTP server on port {}", port, e);
             throw new UncheckedIOException(e);
         }
     }
@@ -52,13 +70,20 @@ class AlanKVService implements KVService {
         if (!started) {
             throw new IllegalStateException("Service is not started");
         }
+
+        log.info("Stopping HTTP server on port {}", port);
         server.stop(0);
+
         try {
             dao.close();
+            log.info("DAO closed successfully");
         } catch (IOException e) {
+            log.error("Failed to close DAO", e);
             throw new UncheckedIOException(e);
         }
+
         started = false;
+        log.info("HTTP server stopped");
     }
 
     private void handleStatus(HttpExchange exchange) throws IOException {
@@ -66,6 +91,7 @@ class AlanKVService implements KVService {
             exchange.sendResponseHeaders(405, -1);
             return;
         }
+
         exchange.sendResponseHeaders(200, -1);
     }
 
@@ -103,13 +129,16 @@ class AlanKVService implements KVService {
         return exchange -> {
             try (exchange) {
                 try {
+                    if (log.isDebugEnabled()) {
+                        log.debug("Handling {} {}", exchange.getRequestMethod(), exchange.getRequestURI());
+                    }
                     handler.handle(exchange);
                 } catch (NoSuchElementException e) {
-                    sendText(exchange, 404, e.getMessage());
+                    sendError(exchange, 404, e.getMessage(), e);
                 } catch (IllegalArgumentException e) {
-                    sendText(exchange, 400, e.getMessage());
+                    sendError(exchange, 400, e.getMessage(), e);
                 } catch (Exception e) {
-                    sendText(exchange, 503, e.getMessage());
+                    sendError(exchange, 503, e.getMessage(), e);
                 }
             }
         };
@@ -118,6 +147,7 @@ class AlanKVService implements KVService {
     private static Map<String, String> parseQuery(HttpExchange exchange) {
         String rawQuery = exchange.getRequestURI().getRawQuery();
         Map<String, String> params = new ConcurrentHashMap<>();
+
         if (rawQuery == null || rawQuery.isEmpty()) {
             return params;
         }
@@ -134,7 +164,29 @@ class AlanKVService implements KVService {
         return params;
     }
 
-    private static void sendText(HttpExchange exchange, int code, String text) throws IOException {
+    private void sendError(HttpExchange exchange, int code, String text, Exception exception) throws IOException {
+        if (code >= 500) {
+            if (log.isErrorEnabled()) {
+                log.error(
+                        "Request {} {} failed with {}",
+                        exchange.getRequestMethod(),
+                        exchange.getRequestURI(),
+                        code,
+                        exception
+                );
+            }
+        } else {
+            if (log.isWarnEnabled()) {
+                log.warn(
+                        "Request {} {} failed with {}: {}",
+                        exchange.getRequestMethod(),
+                        exchange.getRequestURI(),
+                        code,
+                        text
+                );
+            }
+        }
+
         byte[] body = text == null ? new byte[0] : text.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(code, body.length);
         try (OutputStream os = exchange.getResponseBody()) {
