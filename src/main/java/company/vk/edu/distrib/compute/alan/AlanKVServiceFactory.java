@@ -7,6 +7,6 @@ import java.io.IOException;
 public class AlanKVServiceFactory extends KVServiceFactory {
     @Override
     protected KVService doCreate(int port) throws IOException {
-        return new AlanKVService(port, new IMDao());
+        return new AlanKVService(port, new AlanPersistentDao());
     }
 }
